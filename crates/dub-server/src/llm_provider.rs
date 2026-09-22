@@ -67,6 +67,32 @@ pub fn open(o: &LlmOpen, mode: LlmMode) -> Result<LlmProvider, String> {
             let client = ChatClient::ollama(url, model).map_err(|e| e.to_string())?;
             return Ok(LlmProvider::Remote { client });
         }
+        "opencode" => {
+            let model = crate::models::opencode_model(o.models_root, stage);
+            if model.trim().is_empty() {
+                return Err(
+                    "OpenCode выбран, но модель не задана (opencode_llm/opencode_vision)"
+                        .to_string(),
+                );
+            }
+            // Cloud (Zen/Go-sub) без ключа невозможен; local ключ не требует
+            // (опционален — пароль `opencode serve`).
+            let key = if crate::models::opencode_mode(o.models_root) == "cloud" {
+                match crate::models::opencode_key(o.models_root) {
+                    Some(k) => Some(k),
+                    None => {
+                        return Err(
+                            "OpenCode cloud выбран, но ключ не задан (opencode_key)".to_string()
+                        )
+                    }
+                }
+            } else {
+                crate::models::opencode_key(o.models_root)
+            };
+            let base = crate::models::opencode_base_url(o.models_root);
+            let client = ChatClient::opencode(base, model, key).map_err(|e| e.to_string())?;
+            return Ok(LlmProvider::Remote { client });
+        }
         "openrouter" => {
             let explicit = crate::models::llm_provider_explicit(o.models_root, stage);
             let key = crate::models::openrouter_key(o.models_root);
@@ -155,6 +181,54 @@ mod tests {
         crate::models::set_selection(&d, "or_key", "k").unwrap();
         crate::models::set_selection(&d, "or_llm", "google/gemini-2.5-flash").unwrap();
         let p = open_in(&d, LlmMode::Text).unwrap();
+        assert!(p.is_remote());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn opencode_cloud_returns_remote_without_sidecar() {
+        let d = tmp_root("oc-cloud");
+        crate::models::set_selection(&d, "llm_provider", "opencode").unwrap();
+        crate::models::set_selection(&d, "opencode_llm", "opencode/gpt-5.5").unwrap();
+        crate::models::set_selection(&d, "opencode_key", "sk-test").unwrap();
+        let p = open_in(&d, LlmMode::Text).unwrap();
+        assert!(p.is_remote());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn opencode_empty_model_is_explicit_error() {
+        let d = tmp_root("oc-empty");
+        crate::models::set_selection(&d, "llm_provider", "opencode").unwrap();
+        crate::models::set_selection(&d, "opencode_key", "sk-test").unwrap();
+        let e = match open_in(&d, LlmMode::Text) {
+            Ok(_) => panic!("ожидалась ошибка пустой opencode-модели"),
+            Err(e) => e,
+        };
+        assert!(e.contains("OpenCode"), "unexpected error: {e}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn opencode_cloud_without_key_is_explicit_error() {
+        let d = tmp_root("oc-nokey");
+        crate::models::set_selection(&d, "llm_provider", "opencode").unwrap();
+        crate::models::set_selection(&d, "opencode_llm", "opencode/gpt-5.5").unwrap();
+        let e = match open_in(&d, LlmMode::Text) {
+            Ok(_) => panic!("ожидалась ошибка отсутствующего ключа"),
+            Err(e) => e,
+        };
+        assert!(e.contains("opencode_key"), "unexpected error: {e}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn opencode_local_without_key_opens_remote() {
+        let d = tmp_root("oc-local");
+        crate::models::set_selection(&d, "vision_provider", "opencode").unwrap();
+        crate::models::set_selection(&d, "opencode_mode", "local").unwrap();
+        crate::models::set_selection(&d, "opencode_vision", "my-local-model").unwrap();
+        let p = open_in(&d, LlmMode::Vision).unwrap();
         assert!(p.is_remote());
         std::fs::remove_dir_all(&d).ok();
     }
