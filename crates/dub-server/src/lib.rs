@@ -25,6 +25,7 @@ mod jobs;
 mod media;
 mod models;
 mod ocr;
+mod opencode_asr;
 mod patch;
 mod record;
 mod render;

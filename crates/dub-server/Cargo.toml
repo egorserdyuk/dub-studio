@@ -32,7 +32,7 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 mime_guess = "2"
 # setup-автозакачка: HTTPS-загрузка компонентов (rustls, без системного OpenSSL) + распаковка zip/wheel.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "multipart"] }
 # Многопоточная (aria2-style) загрузка byte-range'ами через ureq (метод Higgs-Ultimate). HF Xet-CAS отдаёт
 # 206 на Range-запросы с ureq-UA (reqwest/curl-UA душит 403). Параллельные диапазоны сатурируют канал HF CDN.
 ureq = { version = "3", features = ["socks-proxy"] }   # socks-proxy: без него socks5:// паникует «Enable feature socks-proxy»
