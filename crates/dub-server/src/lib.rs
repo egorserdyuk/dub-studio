@@ -24,6 +24,7 @@ mod presets;
 mod jobs;
 mod media;
 mod models;
+mod models_catalog;
 mod ocr;
 mod opencode_asr;
 mod patch;
@@ -326,6 +327,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/engine/opts", axum::routing::patch(endpoints::set_opts))
         .route("/engine/select", post(endpoints::select_model))
         .route("/engine/openrouter/models", get(endpoints::openrouter_models))
+        .route("/engine/opencode/models", get(endpoints::opencode_models))
         .route("/engine/openrouter/voices", get(endpoints::openrouter_voices))
         .route("/engine/openrouter/verify", post(endpoints::openrouter_verify))
         .route("/engine/proxy/test", post(endpoints::proxy_test))

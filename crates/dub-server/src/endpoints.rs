@@ -56,6 +56,22 @@ pub async fn openrouter_models(State(st): State<AppState>, Query(q): Query<HashM
     }
 }
 
+// ─── GET /engine/opencode/models?kind=llm|vision|asr ─────────────────────────
+// Каталог моделей OpenCode через публичный models.dev (БЕЗ ключа): catalog.json
+// кешируем на 24ч в models/models-dev-catalog.json (stale-on-error), фильтруем
+// по модальности; предпочитаем список провайдера "opencode". Только для OpenCode.
+pub async fn opencode_models(State(st): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
+    let kind = q.get("kind").cloned().unwrap_or_else(|| "llm".to_string());
+    let mroot = st.models_root.clone();
+    let res = tokio::task::spawn_blocking(move || crate::models_catalog::load_opencode_models(&mroot, &kind))
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+    match res {
+        Ok(models) => Json(json!({ "models": models })).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("каталог models.dev: {e}")).into_response(),
+    }
+}
+
 // ─── POST /engine/openrouter/verify {key} ───────────────────────────────────
 // Проверка ключа OpenRouter через сайдкар (Go SDK, операция verify -> credits). Ключ из формы (ввод
 // перед сохранением), НЕ логируется.
