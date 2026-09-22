@@ -21,7 +21,10 @@ pub enum Part {
     /// PNG-кадр как base64 (без префикса) — обёрнём в data:image/png;base64,.
     ImagePngB64(String),
     /// WAV-аудио как base64 (без префикса) + формат ("wav").
-    AudioB64 { data: String, format: String },
+    AudioB64 {
+        data: String,
+        format: String,
+    },
 }
 
 impl Part {
@@ -152,12 +155,24 @@ impl ChatClient {
 
     /// Клиент к OpenRouter (OpenAI-совместимый): фиксированный base_url + ключ + id модели. `model`
     /// подставляется в тело каждого запроса; chat_template_kwargs НЕ шлётся (это llama-специфика).
-    pub fn openrouter(api_key: impl Into<String>, model: impl Into<String>) -> Result<Self, LlmError> {
+    pub fn openrouter(
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Result<Self, LlmError> {
         let mut c = Self::new("https://openrouter.ai/api")?;
         c.auth = Some(api_key.into());
         c.model = Some(model.into());
         c.referer = Some("https://github.com/timoncool/dub-studio".to_string());
         c.title = Some("Dub Studio".to_string());
+        Ok(c)
+    }
+
+    /// Клиент к Ollama (OpenAI-совместимый /v1/chat/completions): base_url настраивается
+    /// (дефолт http://localhost:11434), обязательное поле `model`, без ключа (Ollama Bearer
+    /// игнорирует) и без llama-специфичного chat_template_kwargs (`is_remote()` true по model).
+    pub fn ollama(base_url: impl Into<String>, model: impl Into<String>) -> Result<Self, LlmError> {
+        let mut c = Self::new(base_url)?;
+        c.model = Some(model.into());
         Ok(c)
     }
 
@@ -247,5 +262,43 @@ impl ChatClient {
             "chat failed after {} retries: {last_err}",
             self.retries + 1
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    #[test]
+    fn ollama_sends_model_without_llama_kwargs() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let seen2 = seen.clone();
+        let h = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let n = s.read(&mut buf).unwrap();
+            *seen2.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let body = r#"{"choices":[{"message":{"content":"hi"}}]}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            s.write_all(resp.as_bytes()).unwrap();
+        });
+        let c = ChatClient::ollama(format!("http://127.0.0.1:{port}"), "gemma3").unwrap();
+        let out = c
+            .chat(&[Message::user_text("ping")], &Sampling::new(0.0, 1.0, 32))
+            .unwrap();
+        h.join().unwrap();
+        assert_eq!(out, "hi");
+        let req = seen.lock().unwrap().clone();
+        let start = req.find('{').expect("request has json body");
+        let v: serde_json::Value = serde_json::from_str(&req[start..]).unwrap();
+        assert_eq!(v["model"], "gemma3");
+        assert!(v.get("chat_template_kwargs").is_none());
     }
 }
