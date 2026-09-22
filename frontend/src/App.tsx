@@ -119,6 +119,7 @@ function ModelsSection() {
   useEffect(() => { refresh(); }, []);
   const selv = (k: string) => cap?.selection?.[k] ?? "";
   const hasOrKey = (cap?.selection?.or_key ?? "").trim().length > 0;
+  const hasOcKey = (cap?.selection?.opencode_key ?? "").trim().length > 0;
   const setSel = (k: string, v: string) => api.setSelection(k, v).then(loadCap).catch(() => {});
   const llmProv = selv("llm_provider") || (selv("or_llm_on") === "1" ? "openrouter" : "local");
   const visProv = selv("vision_provider") || (selv("or_vision_on") === "1" ? "openrouter" : "local");
@@ -332,13 +333,18 @@ function ModelsSection() {
       <Group label={t("settings.roleAsr")}>
         {/* Движок ASR: Parakeet-TDT (GPU, дефолт) / Whisper (локально, CPU) / OpenRouter (облако). */}
         <div className="flex gap-1 mb-1.5">
-          {[{ id: "parakeet", label: "Parakeet-TDT", cloud: false }, { id: "whisper", label: "Whisper", cloud: false }, { id: "openrouter", label: "OpenRouter", cloud: true }].map((e) => {
+          {[{ id: "parakeet", label: "Parakeet-TDT", cloud: false }, { id: "whisper", label: "Whisper", cloud: false }, { id: "openrouter", label: "OpenRouter", cloud: true }, { id: "opencode", label: "OpenCode", cloud: true }].map((e) => {
             const asrCloud = selv("or_asr_on") === "1";
-            const active = e.cloud ? asrCloud : (!asrCloud && asrEngine === e.id);
-            const dis = e.cloud && !hasOrKey;
+            const ocAsrOn = selv("opencode_asr_on") === "1";
+            const active = e.id === "openrouter" ? asrCloud : e.id === "opencode" ? ocAsrOn : (!asrCloud && !ocAsrOn && asrEngine === e.id);
+            const dis = e.cloud && (e.id === "openrouter" ? !hasOrKey : ocMode === "cloud" && !hasOcKey);
             return (
               <button key={e.id} disabled={dis} title={dis ? "Введите ключ OpenRouter ниже (Облачные настройки)" : ""}
-                onClick={() => { if (e.cloud) { setSel("or_asr_on", "1"); } else { setSel("or_asr_on", "0"); setAsrEngine(e.id); api.setSelection("asr_engine", e.id).catch(() => {}); } }}
+                onClick={() => {
+                  if (e.id === "openrouter") { setSel("opencode_asr_on", "0"); setSel("or_asr_on", "1"); }
+                  else if (e.id === "opencode") { setSel("or_asr_on", "0"); setSel("opencode_asr_on", "1"); }
+                  else { setSel("or_asr_on", "0"); setSel("opencode_asr_on", "0"); setAsrEngine(e.id); api.setSelection("asr_engine", e.id).catch(() => {}); }
+                }}
                 className={`flex-1 px-2 py-1.5 rounded-md text-[12px] font-medium border transition-colors ${active ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"} disabled:opacity-40`}>
                 {e.label}
               </button>
@@ -346,11 +352,29 @@ function ModelsSection() {
           })}
         </div>
         {/* Локальный ASR (Parakeet/Whisper) — на чём считать: свои табы устройства. */}
-        {selv("or_asr_on") !== "1" && <BackendTabs k="asr_backend" />}
+        {selv("or_asr_on") !== "1" && selv("opencode_asr_on") !== "1" && <BackendTabs k="asr_backend" />}
         {selv("or_asr_on") === "1" ? (
           <div className={`${orRowCls} space-y-2`}>
             <OrModelSelect kind="asr" k="or_asr" empty="— выбрать STT-модель —" />
             <div className="text-[11px] text-[var(--color-muted)]">Транскрипция через облако — тяжёлые локальные ASR-модели качать не нужно.</div>
+          </div>
+        ) : selv("opencode_asr_on") === "1" ? (
+          <div className={`${orRowCls} space-y-2`}>
+            <div className="flex gap-1">
+              {(["cloud", "local"] as const).map((m) => (
+                <button key={m} onClick={() => setSel("opencode_mode", m)}
+                  className={`flex-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors ${ocMode === m ? "border-[var(--color-accent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>
+                  {m === "cloud" ? t("settings.opencodeCloud") : t("settings.opencodeLocal")}
+                </button>
+              ))}
+            </div>
+            {ocMode === "cloud" ? (
+              <input value={selv("opencode_key")} onChange={(e) => setSel("opencode_key", e.target.value)} type="password" className={orSelectCls} placeholder={t("settings.opencodeKey")} />
+            ) : (
+              <input value={selv("opencode_url") || "http://localhost:4096"} onChange={(e) => setSel("opencode_url", e.target.value)} className={orSelectCls} placeholder={t("settings.opencodeUrl")} />
+            )}
+            <OcModelSelect kind="asr" k="opencode_asr" empty={t("settings.opencodeAsr")} />
+            <div className="text-[11px] text-[var(--color-muted)]">{t("settings.opencodeAsrHint")}</div>
           </div>
         ) : asrEngine === "parakeet" ? (
           <VariantPicker base="Parakeet-TDT 0.6B v3" ids={["parakeet", "parakeet-fp32"]} />
