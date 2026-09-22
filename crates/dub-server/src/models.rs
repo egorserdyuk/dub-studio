@@ -101,6 +101,11 @@ pub fn is_selection_key(key: &str) -> bool {
             | "or_asr_on"       // "1" -> транскрипция (ASR) через OpenRouter вместо локального Parakeet/Whisper
             | "or_asr"          // id STT-модели OpenRouter (напр. "openai/whisper-large-v3")
             | "or_concurrency"  // число параллельных облачных запросов (чанки в N потоков; OpenRouter ~50 конкур.)
+            | "llm_provider"    // провайдер текста перевода: "local" (Gemma) | "ollama" | "openrouter"
+            | "vision_provider" // провайдер vision-анализа кадров: "local" | "ollama" | "openrouter"
+            | "ollama_url"      // базовый URL Ollama (дефолт http://localhost:11434)
+            | "ollama_llm"      // id текстовой модели Ollama (напр. "gemma3")
+            | "ollama_vision"   // id vision-модели Ollama (пусто -> берём ollama_llm)
             // Прокси: у части юзеров прямой доступ к HF/OpenRouter закрыт -> все обращения через свой прокси.
             | "proxy_on"        // "1" -> проксировать весь исходящий трафик приложения через proxy_url
             | "proxy_url"       // URL прокси: http|https|socks5://[user:pass@]host:port (хранится локально)
@@ -195,6 +200,62 @@ pub fn openrouter_model(mroot: &Path, stage: &str) -> String {
         "vision" => pick(&sel, "or_vision").or_else(|| pick(&sel, "or_llm")).unwrap_or("").to_string(),
         "tts" => pick(&sel, "or_tts_model").unwrap_or("").to_string(),
         "asr" => pick(&sel, "or_asr").unwrap_or("").to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Провайдер стадии ("llm"|"vision"): "local" | "ollama" | "openrouter".
+/// Back-compat: если ключ *_provider не задан, маппим legacy or_*_on ("1" -> openrouter, иначе local).
+pub fn llm_provider_kind(mroot: &Path, stage: &str) -> &'static str {
+    let sel = load_selection(mroot);
+    let (new_key, legacy_flag) = match stage {
+        "llm" => ("llm_provider", "or_llm_on"),
+        "vision" => ("vision_provider", "or_vision_on"),
+        _ => return "local",
+    };
+    match pick(&sel, new_key) {
+        Some("ollama") => "ollama",
+        Some("openrouter") => "openrouter",
+        Some("local") => "local",
+        _ => {
+            if pick(&sel, legacy_flag) == Some("1") {
+                "openrouter"
+            } else {
+                "local"
+            }
+        }
+    }
+}
+
+/// true, если провайдер стадии задан явно новым ключом (а не legacy or_*_on).
+/// Явный выбор = явная ошибка при плохой конфигурации; legacy = тихий fallback на локаль.
+pub fn llm_provider_explicit(mroot: &Path, stage: &str) -> bool {
+    let sel = load_selection(mroot);
+    let new_key = match stage {
+        "llm" => "llm_provider",
+        "vision" => "vision_provider",
+        _ => return false,
+    };
+    pick(&sel, new_key).is_some()
+}
+
+/// Базовый URL Ollama без хвостового слэша. Дефолт http://localhost:11434.
+pub fn ollama_url(mroot: &Path) -> String {
+    let sel = load_selection(mroot);
+    let u = pick(&sel, "ollama_url").unwrap_or("http://localhost:11434");
+    u.trim_end_matches('/').to_string()
+}
+
+/// id модели Ollama для стадии ("llm"|"vision"). Vision: ollama_vision, пусто -> ollama_llm.
+/// Пусто, если ничего не задано (вызывающий обязан упасть с понятной ошибкой).
+pub fn ollama_model(mroot: &Path, stage: &str) -> String {
+    let sel = load_selection(mroot);
+    match stage {
+        "llm" => pick(&sel, "ollama_llm").unwrap_or("").to_string(),
+        "vision" => pick(&sel, "ollama_vision")
+            .or_else(|| pick(&sel, "ollama_llm"))
+            .unwrap_or("")
+            .to_string(),
         _ => String::new(),
     }
 }
@@ -526,5 +587,53 @@ mod resolve_live_tests {
                 "active.json просит whisper (и он установлен), но резолв дал: {}", choice.describe()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_root(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("dub-ollama-{}-{}", tag, std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let _ = std::fs::remove_file(d.join("active.json"));
+        d
+    }
+
+    #[test]
+    fn provider_kind_defaults_local_with_legacy_fallback() {
+        let d = tmp_root("kind");
+        assert_eq!(llm_provider_kind(&d, "llm"), "local");
+        assert_eq!(llm_provider_kind(&d, "vision"), "local");
+        set_selection(&d, "or_llm_on", "1").unwrap();
+        assert_eq!(llm_provider_kind(&d, "llm"), "openrouter");
+        assert_eq!(llm_provider_kind(&d, "vision"), "local");
+        set_selection(&d, "llm_provider", "ollama").unwrap();
+        assert_eq!(llm_provider_kind(&d, "llm"), "ollama");
+        assert!(!llm_provider_explicit(&d, "vision"));
+        assert!(llm_provider_explicit(&d, "llm"));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn ollama_url_default_and_trims_slash() {
+        let d = tmp_root("url");
+        assert_eq!(ollama_url(&d), "http://localhost:11434");
+        set_selection(&d, "ollama_url", "http://srv:11434/").unwrap();
+        assert_eq!(ollama_url(&d), "http://srv:11434");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn ollama_model_vision_falls_back_to_llm() {
+        let d = tmp_root("model");
+        assert_eq!(ollama_model(&d, "llm"), "");
+        set_selection(&d, "ollama_llm", "gemma3").unwrap();
+        assert_eq!(ollama_model(&d, "llm"), "gemma3");
+        assert_eq!(ollama_model(&d, "vision"), "gemma3");
+        set_selection(&d, "ollama_vision", "qwen3-vl:8b").unwrap();
+        assert_eq!(ollama_model(&d, "vision"), "qwen3-vl:8b");
+        std::fs::remove_dir_all(&d).ok();
     }
 }
