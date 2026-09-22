@@ -176,6 +176,23 @@ impl ChatClient {
         Ok(c)
     }
 
+    /// Клиент к OpenCode (OpenAI-совместимый /v1/chat/completions): cloud —
+    /// base_url https://opencode.ai/zen + Bearer-ключ (Zen/Go-sub), local —
+    /// настраиваемый URL (`opencode serve`, дефолт http://localhost:4096),
+    /// ключ опционален (пароль serve). Обязательное поле `model`
+    /// (`opencode/<id>` для Zen), без llama-специфичного chat_template_kwargs
+    /// (`is_remote()` true по model).
+    pub fn opencode(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        api_key: Option<String>,
+    ) -> Result<Self, LlmError> {
+        let mut c = Self::new(base_url)?;
+        c.model = Some(model.into());
+        c.auth = api_key.filter(|k| !k.trim().is_empty());
+        Ok(c)
+    }
+
     pub fn with_retries(mut self, n: u32) -> Self {
         self.retries = n;
         self
@@ -300,5 +317,71 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&req[start..]).unwrap();
         assert_eq!(v["model"], "gemma3");
         assert!(v.get("chat_template_kwargs").is_none());
+    }
+
+    #[test]
+    fn opencode_cloud_sends_model_and_bearer_without_llama_kwargs() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let seen2 = seen.clone();
+        let h = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let n = s.read(&mut buf).unwrap();
+            *seen2.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let body = r#"{"choices":[{"message":{"content":"hi"}}]}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            s.write_all(resp.as_bytes()).unwrap();
+        });
+        let c = ChatClient::opencode(
+            format!("http://127.0.0.1:{port}"),
+            "opencode/gpt-5.5",
+            Some("sk-test".to_string()),
+        )
+        .unwrap();
+        let out = c
+            .chat(&[Message::user_text("ping")], &Sampling::new(0.0, 1.0, 32))
+            .unwrap();
+        h.join().unwrap();
+        assert_eq!(out, "hi");
+        let req = seen.lock().unwrap().clone();
+        assert!(req.to_lowercase().contains("authorization: bearer sk-test"));
+        let start = req.find('{').expect("request has json body");
+        let v: serde_json::Value = serde_json::from_str(&req[start..]).unwrap();
+        assert_eq!(v["model"], "opencode/gpt-5.5");
+        assert!(v.get("chat_template_kwargs").is_none());
+    }
+
+    #[test]
+    fn opencode_local_without_key_sends_no_auth() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let seen2 = seen.clone();
+        let h = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let n = s.read(&mut buf).unwrap();
+            *seen2.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let body = r#"{"choices":[{"message":{"content":"ok"}}]}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            s.write_all(resp.as_bytes()).unwrap();
+        });
+        let c =
+            ChatClient::opencode(format!("http://127.0.0.1:{port}"), "local-model", None).unwrap();
+        let out = c
+            .chat(&[Message::user_text("ping")], &Sampling::new(0.0, 1.0, 32))
+            .unwrap();
+        h.join().unwrap();
+        assert_eq!(out, "ok");
+        let req = seen.lock().unwrap().clone();
+        assert!(!req.to_lowercase().contains("authorization:"));
     }
 }
