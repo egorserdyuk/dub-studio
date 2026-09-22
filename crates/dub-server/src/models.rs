@@ -101,11 +101,18 @@ pub fn is_selection_key(key: &str) -> bool {
             | "or_asr_on"       // "1" -> транскрипция (ASR) через OpenRouter вместо локального Parakeet/Whisper
             | "or_asr"          // id STT-модели OpenRouter (напр. "openai/whisper-large-v3")
             | "or_concurrency"  // число параллельных облачных запросов (чанки в N потоков; OpenRouter ~50 конкур.)
-            | "llm_provider"    // провайдер текста перевода: "local" (Gemma) | "ollama" | "openrouter"
-            | "vision_provider" // провайдер vision-анализа кадров: "local" | "ollama" | "openrouter"
+            | "llm_provider"    // провайдер текста перевода: "local" (Gemma) | "ollama" | "openrouter" | "opencode"
+            | "vision_provider" // провайдер vision-анализа кадров: "local" | "ollama" | "openrouter" | "opencode"
             | "ollama_url"      // базовый URL Ollama (дефолт http://localhost:11434)
             | "ollama_llm"      // id текстовой модели Ollama (напр. "gemma3")
             | "ollama_vision"   // id vision-модели Ollama (пусто -> берём ollama_llm)
+            | "opencode_key"      // API-ключ OpenCode Zen/Go-sub (Bearer; хранится локально, не логируется)
+            | "opencode_mode"     // "cloud" (Zen) | "local" (`opencode serve` на ПК)
+            | "opencode_url"      // базовый URL локального OpenCode (дефолт http://localhost:4096)
+            | "opencode_llm"      // id текстовой модели (Zen: "opencode/<id>")
+            | "opencode_vision"   // id vision-модели (пусто -> берём opencode_llm)
+            | "opencode_asr"      // id STT-модели OpenCode
+            | "opencode_asr_on"   // "1" -> транскрипция через OpenCode вместо локального ASR
             // Прокси: у части юзеров прямой доступ к HF/OpenRouter закрыт -> все обращения через свой прокси.
             | "proxy_on"        // "1" -> проксировать весь исходящий трафик приложения через proxy_url
             | "proxy_url"       // URL прокси: http|https|socks5://[user:pass@]host:port (хранится локально)
@@ -216,6 +223,7 @@ pub fn llm_provider_kind(mroot: &Path, stage: &str) -> &'static str {
     match pick(&sel, new_key) {
         Some("ollama") => "ollama",
         Some("openrouter") => "openrouter",
+        Some("opencode") => "opencode",
         Some("local") => "local",
         _ => {
             if pick(&sel, legacy_flag) == Some("1") {
@@ -258,6 +266,62 @@ pub fn ollama_model(mroot: &Path, stage: &str) -> String {
             .to_string(),
         _ => String::new(),
     }
+}
+
+/// Режим OpenCode: "local" (`opencode serve` на ПК) или "cloud" (Zen). Дефолт cloud.
+pub fn opencode_mode(mroot: &Path) -> &'static str {
+    match pick(&load_selection(mroot), "opencode_mode") {
+        Some("local") => "local",
+        _ => "cloud",
+    }
+}
+
+/// Базовый URL OpenCode без хвостового слэша. Cloud -> https://opencode.ai/zen
+/// (ChatClient допишет /v1/chat/completions); local -> настройка opencode_url.
+pub fn opencode_base_url(mroot: &Path) -> String {
+    if opencode_mode(mroot) == "local" {
+        let sel = load_selection(mroot);
+        pick(&sel, "opencode_url").unwrap_or("http://localhost:4096").trim_end_matches('/').to_string()
+    } else {
+        "https://opencode.ai/zen".to_string()
+    }
+}
+
+/// API-ключ OpenCode Zen/Go-sub из active.json (локальное хранение, десктоп). Пусто/нет -> None.
+pub fn opencode_key(mroot: &Path) -> Option<String> {
+    pick(&load_selection(mroot), "opencode_key").map(str::to_string)
+}
+
+/// id модели OpenCode для стадии ("llm"|"vision"|"asr"). Vision: opencode_vision,
+/// пусто -> opencode_llm. Пусто, если ничего не задано (вызывающий падает с понятной ошибкой).
+pub fn opencode_model(mroot: &Path, stage: &str) -> String {
+    let sel = load_selection(mroot);
+    match stage {
+        "llm" => pick(&sel, "opencode_llm").unwrap_or("").to_string(),
+        "vision" => pick(&sel, "opencode_vision")
+            .or_else(|| pick(&sel, "opencode_llm"))
+            .unwrap_or("")
+            .to_string(),
+        "asr" => pick(&sel, "opencode_asr").unwrap_or("").to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Включена ли транскрипция через OpenCode: флаг + модель; в cloud-режиме ещё и ключ.
+/// Local-режим ключей в Dub Studio не требует (ключи уже в opencode.json на ПК).
+pub fn opencode_asr_on(mroot: &Path) -> bool {
+    let sel = load_selection(mroot);
+    if pick(&sel, "opencode_asr_on") != Some("1") {
+        return false;
+    }
+    let model_ok = pick(&sel, "opencode_asr").is_some_and(|m| !m.trim().is_empty());
+    if !model_ok {
+        return false;
+    }
+    if pick(&sel, "opencode_mode") != Some("local") && pick(&sel, "opencode_key").is_none() {
+        return false;
+    }
+    true
 }
 
 /// Включена ли облачная транскрипция (ASR через OpenRouter) — флаг + ключ + выбранная модель.
@@ -634,6 +698,51 @@ mod tests {
         assert_eq!(ollama_model(&d, "vision"), "gemma3");
         set_selection(&d, "ollama_vision", "qwen3-vl:8b").unwrap();
         assert_eq!(ollama_model(&d, "vision"), "qwen3-vl:8b");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn opencode_provider_kind_and_helpers() {
+        let d = tmp_root("opencode");
+        assert_eq!(llm_provider_kind(&d, "llm"), "local");
+        set_selection(&d, "llm_provider", "opencode").unwrap();
+        assert_eq!(llm_provider_kind(&d, "llm"), "opencode");
+        assert!(llm_provider_explicit(&d, "llm"));
+        assert_eq!(opencode_mode(&d), "cloud");
+        assert_eq!(opencode_base_url(&d), "https://opencode.ai/zen");
+        set_selection(&d, "opencode_mode", "local").unwrap();
+        assert_eq!(opencode_mode(&d), "local");
+        assert_eq!(opencode_base_url(&d), "http://localhost:4096");
+        set_selection(&d, "opencode_url", "http://srv:4096/").unwrap();
+        assert_eq!(opencode_base_url(&d), "http://srv:4096");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn opencode_model_vision_falls_back_to_llm() {
+        let d = tmp_root("ocmodel");
+        assert_eq!(opencode_model(&d, "llm"), "");
+        set_selection(&d, "opencode_llm", "opencode/gpt-5.5").unwrap();
+        assert_eq!(opencode_model(&d, "llm"), "opencode/gpt-5.5");
+        assert_eq!(opencode_model(&d, "vision"), "opencode/gpt-5.5");
+        set_selection(&d, "opencode_vision", "opencode/gemini-3").unwrap();
+        assert_eq!(opencode_model(&d, "vision"), "opencode/gemini-3");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn opencode_asr_on_gates_flag_model_and_cloud_key() {
+        let d = tmp_root("ocasr");
+        assert!(!opencode_asr_on(&d));
+        set_selection(&d, "opencode_asr_on", "1").unwrap();
+        assert!(!opencode_asr_on(&d));
+        set_selection(&d, "opencode_asr", "opencode/whisper-large-v3").unwrap();
+        assert!(!opencode_asr_on(&d));
+        set_selection(&d, "opencode_key", "sk-test").unwrap();
+        assert!(opencode_asr_on(&d));
+        set_selection(&d, "opencode_mode", "local").unwrap();
+        set_selection(&d, "opencode_key", "").unwrap();
+        assert!(opencode_asr_on(&d));
         std::fs::remove_dir_all(&d).ok();
     }
 }
