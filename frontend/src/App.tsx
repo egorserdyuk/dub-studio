@@ -369,7 +369,6 @@ function ModelsSection() {
           </div>
         ) : llmProv === "ollama" ? (
           <div className={`${orRowCls} space-y-2`}>
-            <input value={selv("ollama_url") || "http://localhost:11434"} onChange={(e) => setSel("ollama_url", e.target.value)} className={orSelectCls} placeholder={t("settings.ollamaUrl")} />
             <input value={selv("ollama_llm")} onChange={(e) => setSel("ollama_llm", e.target.value)} className={orSelectCls} placeholder={t("settings.ollamaLlm")} />
           </div>
         ) : (
@@ -389,6 +388,11 @@ function ModelsSection() {
             <input value={selv("ollama_vision")} onChange={(e) => setSel("ollama_vision", e.target.value)} className={orSelectCls} placeholder={t("settings.ollamaVision")} />
           </div>
         ) : null}
+        {(llmProv === "ollama" || visProv === "ollama") && (
+          <div className={`${orRowCls} space-y-2`}>
+            <input value={selv("ollama_url") || "http://localhost:11434"} onChange={(e) => setSel("ollama_url", e.target.value)} className={orSelectCls} placeholder={t("settings.ollamaUrl")} />
+          </div>
+        )}
       </Group>
       <Group label={t("settings.roleSep")}>
         {/* На чём считать сепарацию — свои табы (GPU CUDA-сборка / CPU-сборка BSRoformer). */}
