@@ -47,3 +47,6 @@ frontend/public/*.mp4
 
 # тестовые видео — не в репо (>100МБ лимит GitHub)
 test_media/
+
+# git worktrees для изолированной разработки (superpowers) — не коммитим
+.worktrees/
