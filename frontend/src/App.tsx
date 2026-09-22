@@ -70,7 +70,7 @@ const activeVariantId = (ids: string[], sel: Record<string, string>): string | u
 // Табы провайдера MT-стадии: локально | Ollama | OpenRouter (модульный уровень — не создавать during render).
 const ProviderTabs = ({ cur, onPick, localLabel, orDisabled, orTitle }: { cur: string; onPick: (id: string) => void; localLabel: string; orDisabled: boolean; orTitle: string }) => (
   <div className="flex gap-1 mb-1.5">
-    {[{ id: "local", label: localLabel }, { id: "ollama", label: "Ollama" }, { id: "openrouter", label: "OpenRouter" }].map((p) => {
+    {[{ id: "local", label: localLabel }, { id: "ollama", label: "Ollama" }, { id: "openrouter", label: "OpenRouter" }, { id: "opencode", label: "OpenCode" }].map((p) => {
       const dis = p.id === "openrouter" && orDisabled;
       const active = cur === p.id;
       return (
@@ -106,6 +106,7 @@ function ModelsSection() {
   // Облачные движки OpenRouter — НЕ отдельный блок, а альтернатива локальному движку ВНУТРИ каждой группы
   // (перевод: Gemma|OpenRouter, TTS: Higgs|OpenRouter), как Parakeet|Whisper в ASR. Ключ общий на все стадии.
   const [orModels, setOrModels] = useState<Record<string, { id: string }[]>>({});
+  const [ocModels, setOcModels] = useState<Record<string, { id: string }[]>>({});
   const [orVoices, setOrVoices] = useState<{ name: string; gender: string; age: string; ru: boolean }[]>([]);
   const [ttsRu, setTtsRu] = useState<boolean | null>(null);
   const loadCap = () => api.capabilities().then((c) => {
@@ -121,12 +122,19 @@ function ModelsSection() {
   const setSel = (k: string, v: string) => api.setSelection(k, v).then(loadCap).catch(() => {});
   const llmProv = selv("llm_provider") || (selv("or_llm_on") === "1" ? "openrouter" : "local");
   const visProv = selv("vision_provider") || (selv("or_vision_on") === "1" ? "openrouter" : "local");
+  const ocMode = selv("opencode_mode") || "cloud";
   // Каталоги моделей по стадиям — динамически из OpenRouter, как только есть рабочий ключ (без хардкода id).
   useEffect(() => {
     if (!hasOrKey) return;
     (["llm", "vision", "tts", "asr"] as const).forEach((kind) =>
       api.openrouterModels(kind).then((r) => setOrModels((m) => ({ ...m, [kind]: r.models }))).catch(() => {}));
   }, [hasOrKey]);
+  // Каталог OpenCode — публичный models.dev (без ключа), как только секция выбрана.
+  useEffect(() => {
+    if (llmProv !== "opencode" && visProv !== "opencode" && selv("opencode_asr_on") !== "1") return;
+    (["llm", "vision", "asr"] as const).forEach((kind) =>
+      api.opencodeModels(kind).then((r) => setOcModels((m) => ({ ...m, [kind]: r.models }))).catch(() => {}));
+  }, [llmProv, visProv, cap?.selection?.opencode_asr_on]);
   // Голоса выбранной облачной TTS-модели (пол/возраст/русский) для дропдауна + предупреждения о русском.
   const orTtsModel = cap?.selection?.or_tts_model ?? "";
   useEffect(() => {
@@ -267,6 +275,12 @@ function ModelsSection() {
       {(orModels[kind] ?? []).map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
     </select>
   );
+  const OcModelSelect = ({ kind, k, empty }: { kind: "llm" | "vision" | "asr"; k: string; empty: string }) => (
+    <select value={selv(k)} onChange={(e) => setSel(k, e.target.value)} className={orSelectCls}>
+      <option value="">{empty}</option>
+      {(ocModels[kind] ?? []).map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
+    </select>
+  );
 
   const browse = async () => {
     if (prog) return;
@@ -371,6 +385,23 @@ function ModelsSection() {
           <div className={`${orRowCls} space-y-2`}>
             <input value={selv("ollama_llm")} onChange={(e) => setSel("ollama_llm", e.target.value)} className={orSelectCls} placeholder={t("settings.ollamaLlm")} />
           </div>
+        ) : llmProv === "opencode" ? (
+          <div className={`${orRowCls} space-y-2`}>
+            <div className="flex gap-1">
+              {(["cloud", "local"] as const).map((m) => (
+                <button key={m} onClick={() => setSel("opencode_mode", m)}
+                  className={`flex-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors ${ocMode === m ? "border-[var(--color-accent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>
+                  {m === "cloud" ? t("settings.opencodeCloud") : t("settings.opencodeLocal")}
+                </button>
+              ))}
+            </div>
+            {ocMode === "cloud" ? (
+              <input value={selv("opencode_key")} onChange={(e) => setSel("opencode_key", e.target.value)} type="password" className={orSelectCls} placeholder={t("settings.opencodeKey")} />
+            ) : (
+              <input value={selv("opencode_url") || "http://localhost:4096"} onChange={(e) => setSel("opencode_url", e.target.value)} className={orSelectCls} placeholder={t("settings.opencodeUrl")} />
+            )}
+            <OcModelSelect kind="llm" k="opencode_llm" empty={t("settings.opencodeLlm")} />
+          </div>
         ) : (
           <>
             <VariantPicker base="Gemma-4 12B QAT + vision" ids={["gemma", "gemma-q5_0", "gemma-q6_k", "gemma-q8_0"]} />
@@ -386,6 +417,23 @@ function ModelsSection() {
         ) : visProv === "ollama" ? (
           <div className={`${orRowCls} space-y-2`}>
             <input value={selv("ollama_vision")} onChange={(e) => setSel("ollama_vision", e.target.value)} className={orSelectCls} placeholder={t("settings.ollamaVision")} />
+          </div>
+        ) : visProv === "opencode" ? (
+          <div className={`${orRowCls} space-y-2`}>
+            <div className="flex gap-1">
+              {(["cloud", "local"] as const).map((m) => (
+                <button key={m} onClick={() => setSel("opencode_mode", m)}
+                  className={`flex-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors ${ocMode === m ? "border-[var(--color-accent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)]"}`}>
+                  {m === "cloud" ? t("settings.opencodeCloud") : t("settings.opencodeLocal")}
+                </button>
+              ))}
+            </div>
+            {ocMode === "cloud" ? (
+              <input value={selv("opencode_key")} onChange={(e) => setSel("opencode_key", e.target.value)} type="password" className={orSelectCls} placeholder={t("settings.opencodeKey")} />
+            ) : (
+              <input value={selv("opencode_url") || "http://localhost:4096"} onChange={(e) => setSel("opencode_url", e.target.value)} className={orSelectCls} placeholder={t("settings.opencodeUrl")} />
+            )}
+            <OcModelSelect kind="vision" k="opencode_vision" empty={t("settings.opencodeVision")} />
           </div>
         ) : null}
         {(llmProv === "ollama" || visProv === "ollama") && (
