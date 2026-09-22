@@ -67,6 +67,22 @@ const VARIANT_SLOT: Record<string, [string, string]> = {
 const activeVariantId = (ids: string[], sel: Record<string, string>): string | undefined =>
   ids.find((id) => { const m = VARIANT_SLOT[id]; return !!m && sel[m[0]] === m[1]; });
 
+// Табы провайдера MT-стадии: локально | Ollama | OpenRouter (модульный уровень — не создавать during render).
+const ProviderTabs = ({ cur, onPick, localLabel, orDisabled, orTitle }: { cur: string; onPick: (id: string) => void; localLabel: string; orDisabled: boolean; orTitle: string }) => (
+  <div className="flex gap-1 mb-1.5">
+    {[{ id: "local", label: localLabel }, { id: "ollama", label: "Ollama" }, { id: "openrouter", label: "OpenRouter" }].map((p) => {
+      const dis = p.id === "openrouter" && orDisabled;
+      const active = cur === p.id;
+      return (
+        <button key={p.id} disabled={dis} title={dis ? orTitle : ""} onClick={() => onPick(p.id)}
+          className={`flex-1 px-2 py-1.5 rounded-md text-[12px] font-medium border transition-colors ${active ? "border-[var(--color-accent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-text)]" : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"} disabled:opacity-40`}>
+          {p.label}
+        </button>
+      );
+    })}
+  </div>
+);
+
 // 25 европейских языков, которые распознаёт дефолтный ASR Parakeet-TDT v3. Источник вне этого набора
 // требует Whisper (99 языков) — переключаем движок автоматически с уведомлением.
 const PARAKEET_LANGS = new Set([
@@ -103,6 +119,8 @@ function ModelsSection() {
   const selv = (k: string) => cap?.selection?.[k] ?? "";
   const hasOrKey = (cap?.selection?.or_key ?? "").trim().length > 0;
   const setSel = (k: string, v: string) => api.setSelection(k, v).then(loadCap).catch(() => {});
+  const llmProv = selv("llm_provider") || (selv("or_llm_on") === "1" ? "openrouter" : "local");
+  const visProv = selv("vision_provider") || (selv("or_vision_on") === "1" ? "openrouter" : "local");
   // Каталоги моделей по стадиям — динамически из OpenRouter, как только есть рабочий ключ (без хардкода id).
   useEffect(() => {
     if (!hasOrKey) return;
@@ -344,18 +362,15 @@ function ModelsSection() {
         )}
       </Group>
       <Group label={t("settings.roleMt")}>
-        <EngineTabs cloud={selv("or_llm_on") === "1"} localLabel="Gemma-4 12B" onLocal={() => setSel("or_llm_on", "0")} onCloud={() => setSel("or_llm_on", "1")} />
-        {selv("or_llm_on") === "1" ? (
+        <ProviderTabs cur={llmProv} onPick={(id) => setSel("llm_provider", id)} localLabel="Gemma-4 12B" orDisabled={!hasOrKey} orTitle={t("settings.needOrKey")} />
+        {llmProv === "openrouter" ? (
           <div className={`${orRowCls} space-y-2`}>
             <OrModelSelect kind="llm" k="or_llm" empty="— выбрать модель перевода —" />
-            <div className="flex items-center gap-2 pt-0.5">
-              <button onClick={() => setSel("or_vision_on", selv("or_vision_on") === "1" ? "0" : "1")}
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${selv("or_vision_on") === "1" ? "bg-[var(--color-accent)]" : "bg-[var(--color-surface)] border border-[var(--color-border)]"}`}>
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${selv("or_vision_on") === "1" ? "left-[18px]" : "left-0.5"}`} />
-              </button>
-              <span className="text-[12px]">Vision-анализ кадров через облако</span>
-            </div>
-            {selv("or_vision_on") === "1" && <OrModelSelect kind="vision" k="or_vision" empty="как модель перевода" />}
+          </div>
+        ) : llmProv === "ollama" ? (
+          <div className={`${orRowCls} space-y-2`}>
+            <input value={selv("ollama_url") || "http://localhost:11434"} onChange={(e) => setSel("ollama_url", e.target.value)} className={orSelectCls} placeholder={t("settings.ollamaUrl")} />
+            <input value={selv("ollama_llm")} onChange={(e) => setSel("ollama_llm", e.target.value)} className={orSelectCls} placeholder={t("settings.ollamaLlm")} />
           </div>
         ) : (
           <>
@@ -363,6 +378,17 @@ function ModelsSection() {
             {rowOf("llama")}
           </>
         )}
+        <div className="text-[12px] text-[var(--color-muted)] pt-1">{t("settings.visionTitle")}</div>
+        <ProviderTabs cur={visProv} onPick={(id) => setSel("vision_provider", id)} localLabel="Gemma-4 12B" orDisabled={!hasOrKey} orTitle={t("settings.needOrKey")} />
+        {visProv === "openrouter" ? (
+          <div className={`${orRowCls} space-y-2`}>
+            <OrModelSelect kind="vision" k="or_vision" empty={t("settings.emptyVisionOr")} />
+          </div>
+        ) : visProv === "ollama" ? (
+          <div className={`${orRowCls} space-y-2`}>
+            <input value={selv("ollama_vision")} onChange={(e) => setSel("ollama_vision", e.target.value)} className={orSelectCls} placeholder={t("settings.ollamaVision")} />
+          </div>
+        ) : null}
       </Group>
       <Group label={t("settings.roleSep")}>
         {/* На чём считать сепарацию — свои табы (GPU CUDA-сборка / CPU-сборка BSRoformer). */}

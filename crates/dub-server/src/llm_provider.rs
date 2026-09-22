@@ -1,4 +1,4 @@
-//! Выбор LLM-провайдера для одной стадии: локальный llama-server (Gemma+mmproj) ИЛИ облако OpenRouter.
+//! Выбор LLM-провайдера для одной стадии: локальный llama-server (Gemma+mmproj) ИЛИ Ollama ИЛИ облако OpenRouter.
 //! Переключение — по настройкам active.json (or_key + or_llm_on/or_vision_on). Абстрагирует 5 call-site'ов
 //! (translate/compose/endpoints/analyze), где раньше был прямой `LlamaServer::start + ChatClient::new`.
 //!
